@@ -133,7 +133,7 @@ void loop() {
     // Small delay to allow the SPI bus to stabilize
     delay(10);
 
-    // Check for new cards
+    // Check for new cards and read UID
     if (rfid[reader].PICC_IsNewCardPresent() && rfid[reader].PICC_ReadCardSerial()) {
       // Read UID
       byte* uid = rfid[reader].uid.uidByte;
@@ -162,6 +162,7 @@ void loop() {
           digitalWrite(relayPins[reader], HIGH);
           lightedCandles[reader] = true;
         }
+
       } else if(compareUID(uid, uidSize, resetUID, resetUIDLength)) {
         Serial.println("Reset card detected! Reseting...");
         //Run reset function
@@ -174,15 +175,25 @@ void loop() {
           // Flash all LEDs
         flashAllCandles(reader, 3, 100); // Flash all candles 3 times and turn off the current candle
       }
-
-      rfid[reader].PICC_HaltA(); // Halt the current card
+      //Stop and clear the communication
+      rfid[reader].PICC_HaltA(); 
       rfid[reader].PCD_StopCrypto1();
     } //Check for new cards end here
 
-    //when detected item is moved 
+    /* when detected item is moved,
+    if PICC_IsNewCardPresent() == false, no tag is close or contact,
+    and if lightedCandles is true, it means the candle is lit before. 
+    So, this two conditions can be used to detecte if the corrted item has been moved
+    */
     if(!rfid[reader].PICC_IsNewCardPresent() && lightedCandles[reader]){
 
-      flashAndResetCandle(reader,3,100);
+      Serial.print("Candle for reader ");
+      Serial.print(reader);
+      Serial.println(" turned off as item moved.");
+
+      lightedCandles[reader] = false;
+      cardDetected[reader] = false;
+      digitalWrite(relayPins[reader], LOW);
     }
 
     // Deactivate the current reader
@@ -278,14 +289,14 @@ void flashAllCandles(uint8_t times, unsigned long duration) {
 
 /* ------------------Flash and reset Candles---------------------*/
 //use to turn off the candle when candle has been turn on but move to other mismatch reader
-void flashAndResetCandle(uint8_t reader, uint8_t times, unsigned long duration) {
-    flashAllCandles(times, duration); 
+// void flashAndResetCandle(uint8_t reader, uint8_t times, unsigned long duration) {
+//     flashAllCandles(times, duration); 
 
-    // turn off the current candle
-    lightedCandles[reader] = false;
-    cardDetected[reader] = false;
-    digitalWrite(relayPins[reader], LOW);
-}
+//     // turn off the current candle
+//     lightedCandles[reader] = false;
+//     cardDetected[reader] = false;
+//     digitalWrite(relayPins[reader], LOW);
+// }
 
 /* ------------------Reset to Initial State---------------------*/
 void resetToInitialState() { 
