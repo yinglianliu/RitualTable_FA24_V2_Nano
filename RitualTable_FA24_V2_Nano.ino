@@ -10,7 +10,11 @@
 */
 
 /*
-v7: 11/25, some change: add a array to track which candles has been lighted and 
+v7: 11/26 
+Update the rules for candles being lit or turn off: 
+If the item and reader match, the corresponding candle is lit. 
+If the candle is already lit but the audience moves the object away, turn off the corresponding candle. 
+If the audience puts the item in an mismatched reader position, flash three times and keep the correctly lit candle lit.
  */
 
 /* 
