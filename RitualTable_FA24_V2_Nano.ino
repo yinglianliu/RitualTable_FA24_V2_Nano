@@ -81,6 +81,10 @@ bool puzzleSolved = false;
 //use this array to track which candles has been lighted
 bool lightedCandles[Num_Readers] = {false, false, false, false, false};
 
+//Counter to track consecutive missed reads for each reader (for card removal detection)
+uint8_t missCount[Num_Readers] = {0, 0, 0, 0, 0};
+const uint8_t MISS_THRESHOLD = 3; // Must miss N consecutive times before considering card removed
+
 void setup() {
   Serial.begin(115200);
   //delay(1000);
@@ -123,6 +127,31 @@ void setup() {
 }
 
 void loop() {
+
+  // If puzzle is already solved, only check for reset card (admin use)
+  if (puzzleSolved) {
+    for (uint8_t reader = 0; reader < Num_Readers; reader++) {
+      for (uint8_t i = 0; i < Num_Readers; i++) {
+        digitalWrite(ssPins[i], HIGH);
+      }
+      digitalWrite(ssPins[reader], LOW);
+      delay(10);
+
+      if (rfid[reader].PICC_IsNewCardPresent() && rfid[reader].PICC_ReadCardSerial()) {
+        byte* uid = rfid[reader].uid.uidByte;
+        byte uidSize = rfid[reader].uid.size;
+
+        if (compareUID(uid, uidSize, resetUID, resetUIDLength)) {
+          Serial.println("Reset card detected after puzzle solved! Resetting...");
+          resetToInitialState();
+        }
+        rfid[reader].PICC_HaltA();
+        rfid[reader].PCD_StopCrypto1();
+      }
+      digitalWrite(ssPins[reader], HIGH);
+    }
+    return;
+  }
 
   bool allCorrectCardsDetected = true;
 
@@ -177,27 +206,59 @@ void loop() {
         Serial.print(reader);
         Serial.println(": UID does not match."); 
           // Flash all LEDs
-        flashAllCandles(reader, 3, 100); // Flash all candles 3 times and turn off the current candle
+        flashAllCandles(3, 100); // Flash all candles 3 times as a visual cue
       }
       //Stop and clear the communication
       rfid[reader].PICC_HaltA(); 
       rfid[reader].PCD_StopCrypto1();
     } //Check for new cards end here
 
-    /* when detected item is moved,
-    if PICC_IsNewCardPresent() == false, no tag is close or contact,
-    and if lightedCandles is true, it means the candle is lit before. 
-    So, this two conditions can be used to detecte if the corrted item has been moved
+    /* Card removal detection using PICC_WakeupA:
+       PICC_WakeupA sends a WUPA command which can wake up a HALTed card.
+       If the card is still present, it will respond (STATUS_OK).
+       If the card has been removed, it will fail.
+       We use a miss counter to avoid false triggers from signal instability.
     */
-    if(!rfid[reader].PICC_IsNewCardPresent() && lightedCandles[reader]){
+    if (lightedCandles[reader]) {
+      byte bufferATQA[2];
+      byte bufferSize = sizeof(bufferATQA);
+      MFRC522::StatusCode status = rfid[reader].PICC_WakeupA(bufferATQA, &bufferSize);
 
-      Serial.print("Candle for reader ");
-      Serial.print(reader);
-      Serial.println(" turned off as item moved.");
+      if (status == MFRC522::STATUS_OK) {
+        // Card responded to WakeupA, now re-read UID to verify it's still the correct card
+        if (rfid[reader].PICC_ReadCardSerial()) {
+          byte* uid = rfid[reader].uid.uidByte;
+          byte uidSize = rfid[reader].uid.size;
 
-      lightedCandles[reader] = false;
-      cardDetected[reader] = false;
-      digitalWrite(relayPins[reader], LOW);
+          if (compareUID(uid, uidSize, targetUIDs[reader], targetUIDLengths[reader])) {
+            // Same correct card, reset miss counter
+            missCount[reader] = 0;
+          } else {
+            // Card was swapped! Turn off the candle
+            Serial.print("Reader ");
+            Serial.print(reader);
+            Serial.println(": Card swapped! Turning off candle.");
+            lightedCandles[reader] = false;
+            cardDetected[reader] = false;
+            digitalWrite(relayPins[reader], LOW);
+            missCount[reader] = 0;
+          }
+        }
+        rfid[reader].PICC_HaltA(); // Halt again to keep state clean
+      } else {
+        // Card might be removed, increment miss counter
+        missCount[reader]++;
+        if (missCount[reader] >= MISS_THRESHOLD) {
+          Serial.print("Candle for reader ");
+          Serial.print(reader);
+          Serial.println(" turned off as item moved.");
+
+          lightedCandles[reader] = false;
+          cardDetected[reader] = false;
+          digitalWrite(relayPins[reader], LOW);
+          missCount[reader] = 0; // Reset counter after turning off
+        }
+      }
     }
 
     // Deactivate the current reader
@@ -304,12 +365,12 @@ void flashAllCandles(uint8_t times, unsigned long duration) {
 
 /* ------------------Reset to Initial State---------------------*/
 void resetToInitialState() { 
-  // reset all detected tags and cards to false
+  // reset all detected tags, cards, and miss counters
   for (uint8_t i = 0; i < Num_Readers; i++) {
     cardDetected[i] = false;
     lightedCandles[i] = false;
+    missCount[i] = 0;
     digitalWrite(relayPins[i], LOW);
-
   }
   
     //allCorrectCardsDetected = false;
